@@ -359,6 +359,10 @@ footer {
   <div class="section">
     <div class="section-label">Recording</div>
     <div class="controls">
+      <label style="font-size: 10px; color: var(--text-dim); display: flex; align-items: center; gap: 8px; margin-bottom: 2px; cursor: pointer; text-transform: uppercase; font-weight: 600; letter-spacing: 0.1em;">
+        <input type="checkbox" id="chk-translate" />
+        Translate to English
+      </label>
       <button class="btn btn-start" id="btn-start" disabled>▶ START TRANSCRIBING</button>
       <button class="btn btn-stop"  id="btn-stop"  disabled>■ STOP</button>
     </div>
@@ -430,7 +434,6 @@ footer {
 
 const SAMPLE_RATE    = 16000;
 const CHUNK_SAMPLES  = 1024; // 60 ms
-const WS_URL         = `ws://${location.host}/ws/transcribe`;
 
 // ── State ─────────────────────────────────────────────────────────
 let ws = null, audioCtx = null, mediaStream = null, processor = null, analyser = null;
@@ -560,7 +563,9 @@ btnLoad.addEventListener('click', async () => {
 function connectWS(onReady) {
   setConn('connecting');
   log('Connecting…', 'info');
-  ws = new WebSocket(WS_URL);
+  const doTranslate = $('chk-translate')?.checked ? 'true' : 'false';
+  const url = `ws://${location.host}/ws/transcribe?translate=${doTranslate}`;
+  ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => { setConn('connected'); log('Socket open', 'success'); };

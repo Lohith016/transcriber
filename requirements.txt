@@ -10,5 +10,5 @@ faster-whisper>=1.0.3
 numpy>=1.26.0
 
 # ── Optional: GPU acceleration (uncomment if you have an NVIDIA GPU) ──
-# torch>=2.2.0          # auto-detected at runtime; install separately from pytorch.org
-# nvidia-cudnn-cu11     # or cu12 depending on your CUDA version
+torch>=2.2.0          # auto-detected at runtime; install separately from pytorch.org
+nvidia-cudnn-cu11     # or cu12 depending on your CUDA version

@@ -160,8 +160,10 @@ class WhisperProvider:
         pcm_int16: bytes,
         session_id: str,
         audio_cursor_ms: int,
+        translate: bool = False,
     ) -> Optional[TranscriptionResult]:
         state = self._get_session(session_id)
+        state["translate"] = translate
 
         # Convert Int16 → Float32 normalized [-1, 1]
         samples = np.frombuffer(pcm_int16, dtype=np.int16).astype(np.float32) / 32768.0
@@ -201,9 +203,11 @@ class WhisperProvider:
             if model is None:
                 return None
 
+            task_type = "translate" if state.get("translate") else "transcribe"
             segments, info = model.transcribe(
                 audio,
                 language=None,               # auto-detect
+                task=task_type,
                 word_timestamps=True,        # essential for token-level output
                 vad_filter=True,             # skip silence
                 vad_parameters={"min_silence_duration_ms": 300},
@@ -296,15 +300,16 @@ class Session:
     websocket:        WebSocket
     audio_cursor_ms:  int   = 0
     chunk_duration_ms: int  = 60
+    translate:        bool  = False
     created_at:       float = field(default_factory=time.time)
 
 class SessionManager:
     def __init__(self):
         self._sessions: dict[str, Session] = {}
 
-    def create(self, ws: WebSocket) -> Session:
+    def create(self, ws: WebSocket, translate: bool = False) -> Session:
         sid     = str(uuid.uuid4())
-        session = Session(session_id=sid, websocket=ws)
+        session = Session(session_id=sid, websocket=ws, translate=translate)
         self._sessions[sid] = session
         return session
 
@@ -347,9 +352,10 @@ async def load_model(model_name: str):
 
 
 @app.websocket("/ws/transcribe")
-async def transcribe_ws(websocket: WebSocket):
+async def transcribe_ws(websocket: WebSocket, translate: str = "false"):
     await websocket.accept()
-    session = session_manager.create(websocket)
+    is_translate = translate.lower() == "true"
+    session = session_manager.create(websocket, translate=is_translate)
     sid     = session.session_id
 
     await websocket.send_text(json.dumps({
@@ -366,6 +372,7 @@ async def transcribe_ws(websocket: WebSocket):
                 pcm_int16        = data,
                 session_id       = sid,
                 audio_cursor_ms  = session.audio_cursor_ms,
+                translate        = session.translate,
             )
             if result:
                 await websocket.send_text(result.to_json())
