@@ -190,7 +190,7 @@ aside::-webkit-scrollbar-thumb { background: var(--border2); }
   font-size: 9px; letter-spacing: 0.06em;
   border: 1px solid var(--border);
   background: var(--surface2);
-  display: flex; align-items: center; gap: 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   min-height: 32px;
 }
 .model-status-bar.ok     { border-color: rgba(0,245,160,0.25); color: var(--green); }
@@ -258,9 +258,16 @@ main {
 }
 
 /* Tokens */
-.tok { display: inline; transition: color 0.25s, opacity 0.25s; }
-.tok.interim { color: var(--interim); opacity: 0.72; border-bottom: 1px dotted rgba(96,216,248,0.3); }
-.tok.final   { color: var(--final); opacity: 1; border-bottom: none; }
+.tok { display: inline; transition: color 0.25s, opacity 0.25s, background 0.25s; border-radius: 2px; padding: 0 1px; }
+.tok.interim {
+  color: var(--bg); background: var(--accent); opacity: 0.9;
+  animation: pulse-word 1.2s infinite; font-weight: 600;
+}
+@keyframes pulse-word {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(0,200,240,0.6); }
+  50% { opacity: 0.7; box-shadow: 0 0 2px rgba(0,200,240,0.2); }
+}
+.tok.final   { color: var(--final); opacity: 1; border-bottom: none; background: transparent; }
 .tok[data-tip] { cursor: default; position: relative; }
 .tok[data-tip]:hover::after {
   content: attr(data-tip);
@@ -323,7 +330,30 @@ footer {
 <header>
   <div class="logo">VOX<em>STREAM</em></div>
   <div class="header-sep"></div>
-  <div class="header-tag">Local Whisper Engine</div>
+  <div class="header-tag" style="margin-right: 20px;">Local Whisper Engine</div>
+
+  <div class="header-stats" style="display: flex; gap: 16px; align-items: center; background: rgba(0,200,240,0.04); padding: 6px 16px; border-radius: 4px; border: 1px solid var(--border); margin-left: 20px;">
+    <div style="display:flex; flex-direction:column; align-items:flex-start;">
+      <div style="font-size:14px; font-weight:700; color:var(--accent); font-family:var(--display); line-height:1; margin-bottom:2px;" id="stat-tok">0</div>
+      <div style="font-size:8px; letter-spacing:0.12em; color:var(--text-muted); text-transform:uppercase;">Tokens</div>
+    </div>
+    <div style="width:1px; height:20px; background:var(--border2);"></div>
+    <div style="display:flex; flex-direction:column; align-items:flex-start;">
+      <div style="font-size:14px; font-weight:700; color:var(--accent); font-family:var(--display); line-height:1; margin-bottom:2px;" id="stat-wrd">0</div>
+      <div style="font-size:8px; letter-spacing:0.12em; color:var(--text-muted); text-transform:uppercase;">Words</div>
+    </div>
+    <div style="width:1px; height:20px; background:var(--border2);"></div>
+    <div style="display:flex; flex-direction:column; align-items:flex-start;">
+      <div style="font-size:14px; font-weight:700; color:var(--accent); font-family:var(--display); line-height:1; margin-bottom:2px;" id="stat-conf">—</div>
+      <div style="font-size:8px; letter-spacing:0.12em; color:var(--text-muted); text-transform:uppercase;">Avg Conf</div>
+    </div>
+    <div style="width:1px; height:20px; background:var(--border2);"></div>
+    <div style="display:flex; flex-direction:column; align-items:flex-start;">
+      <div style="font-size:14px; font-weight:700; color:var(--accent); font-family:var(--display); line-height:1; margin-bottom:2px;" id="stat-lang">—</div>
+      <div style="font-size:8px; letter-spacing:0.12em; color:var(--text-muted); text-transform:uppercase;">Language</div>
+    </div>
+  </div>
+
   <div class="header-right">
     <div class="conn-pill" id="conn-pill">
       <span class="dot" id="conn-dot"></span>
@@ -368,16 +398,6 @@ footer {
     </div>
   </div>
 
-  <!-- STATS -->
-  <div class="section">
-    <div class="section-label">Live Stats</div>
-    <div class="stats-grid">
-      <div class="stat"><div class="stat-val" id="stat-tok">0</div><div class="stat-lbl">Tokens</div></div>
-      <div class="stat"><div class="stat-val" id="stat-wrd">0</div><div class="stat-lbl">Words</div></div>
-      <div class="stat"><div class="stat-val" id="stat-conf">—</div><div class="stat-lbl">Avg Conf</div></div>
-      <div class="stat"><div class="stat-val" id="stat-lang">—</div><div class="stat-lbl">Language</div></div>
-    </div>
-  </div>
 
   <!-- SESSION -->
   <div class="section">
@@ -439,7 +459,7 @@ const CHUNK_SAMPLES  = 1024; // 60 ms
 let ws = null, audioCtx = null, mediaStream = null, processor = null, analyser = null;
 const tokenMap = new Map(), tokenOrder = [];
 let sessionId = null, totalChunks = 0, totalAudioMs = 0, maxAudioMs = 1;
-let selectedModel = null, loadedModel = null;
+let selectedModel = 'large-v3', loadedModel = null;
 let _lastHash = '';
 let _pollTimer = null; // model-load poll
 
@@ -502,9 +522,7 @@ function renderModelCards(activeModel) {
 
 function setModelStatus(state, msg) {
   modelBar.className = 'model-status-bar ' + state;
-  modelBar.innerHTML = state === 'busy'
-    ? `<span class="spin">⟳</span> ${msg}`
-    : msg;
+  modelBar.innerHTML = msg;
 }
 
 // ── Poll server for model status ──────────────────────────────────
@@ -516,7 +534,9 @@ async function fetchModelStatus() {
     loadedModel = data.loaded_model || null;
 
     if (data.loading) {
-      setModelStatus('busy', `Loading ${data.loaded_model || selectedModel || ''}…`);
+      const prog = data.progress ? `<div style="flex-basis: 100%; font-size:10px; padding: 6px; background: rgba(0,200,240,0.15); border: 1px solid var(--accent); color:var(--accent); border-radius: 3px; font-family: var(--mono); text-align: center; font-weight: 600; letter-spacing: 0;">${data.progress}</div>` : '';
+      const loadingName = data.loading_model || selectedModel || '';
+      setModelStatus('busy', `<div style="display:flex; align-items:center; gap:8px;"><span class="spin">⟳</span> Loading ${loadingName}…</div>${prog}`);
       btnStart.disabled = true;
     } else if (data.error) {
       setModelStatus('error', '✗ ' + data.error);
@@ -545,7 +565,7 @@ async function fetchModelStatus() {
 btnLoad.addEventListener('click', async () => {
   if (!selectedModel) return;
   btnLoad.disabled = true;
-  setModelStatus('busy', `Loading ${selectedModel}…`);
+  setModelStatus('busy', `<div style="display:flex; align-items:center; gap:8px;"><span class="spin">⟳</span> Loading ${selectedModel}…</div>`);
   log(`Loading ${selectedModel}`, 'purple');
 
   try {

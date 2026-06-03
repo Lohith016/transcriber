@@ -74,7 +74,7 @@ class TranscriptionResult:
 # ─────────────────────────────────────────────────────────────────────────────
 
 SAMPLE_RATE        = 16000
-CHUNK_TRIGGER_MS   = 3000   # Run Whisper every 3 s of buffered audio
+CHUNK_TRIGGER_MS   = 400    # Ultra-fast 400ms trigger for lightning real-time speed
 MAX_BUFFER_MS      = 30000  # Keep max 30 s of rolling context
 OVERLAP_MS         = 1000   # Overlap between windows to avoid cut-off words
 
@@ -85,6 +85,8 @@ class WhisperProvider:
         self._lock       = threading.Lock()
         self._loading    = False
         self._load_error = None
+        self._load_progress = ""
+        self._loading_model = None
 
         # Per-session state
         self._sessions: dict[str, dict] = {}
@@ -95,7 +97,9 @@ class WhisperProvider:
         return {
             "loaded_model": self._model_name,
             "loading":      self._loading,
+            "loading_model": self._loading_model,
             "error":        self._load_error,
+            "progress":     self._load_progress,
             "models":       WHISPER_MODELS,
         }
 
@@ -107,9 +111,35 @@ class WhisperProvider:
             return {"ok": False, "error": "Another model is already loading"}
 
         self._loading    = True
+        self._loading_model = model_name
         self._load_error = None
+        self._load_progress = ""
 
         def _do_load():
+            import sys
+            class TqdmInterceptor:
+                def __init__(self, provider, orig_stderr):
+                    self.provider = provider
+                    self.orig = orig_stderr
+                    self.buf = ""
+                def write(self, s):
+                    self.orig.write(s)
+                    for c in s:
+                        if c in ('\r', '\n'):
+                            text = self.buf.strip()
+                            if "%|" in text or "B/s" in text or "it/s" in text:
+                                self.provider._load_progress = text
+                            self.buf = ""
+                        else:
+                            self.buf += c
+                def flush(self):
+                    self.orig.flush()
+                def isatty(self):
+                    return True
+
+            orig_stderr = sys.stderr
+            sys.stderr = TqdmInterceptor(self, orig_stderr)
+
             try:
                 from faster_whisper import WhisperModel
                 # Use GPU if available, fall back to CPU
@@ -130,7 +160,10 @@ class WhisperProvider:
                 self._load_error = str(e)
                 print(f"[Whisper] Load error: {e}")
             finally:
+                sys.stderr = orig_stderr
                 self._loading = False
+                self._loading_model = None
+                self._load_progress = ""
 
         t = threading.Thread(target=_do_load, daemon=True)
         t.start()
@@ -211,7 +244,7 @@ class WhisperProvider:
                 word_timestamps=True,        # essential for token-level output
                 vad_filter=True,             # skip silence
                 vad_parameters={"min_silence_duration_ms": 300},
-                beam_size=5,
+                beam_size=1,                 # Greedy decoding for lightning speed
                 without_timestamps=False,
             )
 
