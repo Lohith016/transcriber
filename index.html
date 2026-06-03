@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VOXSTREAM — Whisper Transcription</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+/* ── Reset ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #05080c;
+  --surface:     #0b1018;
+  --surface2:    #101820;
+  --surface3:    #162030;
+  --border:      #1a2d42;
+  --border2:     #243d5a;
+  --accent:      #00c8f0;
+  --accent2:     #008ab0;
+  --accent-glow: rgba(0,200,240,0.12);
+  --green:       #00f5a0;
+  --green-dim:   #00c078;
+  --red:         #ff3d5c;
+  --amber:       #ffaa30;
+  --purple:      #a78bfa;
+  --text:        #c4d8ee;
+  --text-dim:    #4d7090;
+  --text-muted:  #243348;
+  --mono:        'IBM Plex Mono', monospace;
+  --display:     'Syne', sans-serif;
+  --interim:     #60d8f8;
+  --final:       #e2f0ff;
+
+  /* model quality tiers */
+  --tier1: #4d7090;
+  --tier2: #00c078;
+  --tier3: #00c8f0;
+  --tier4: #a78bfa;
+  --tier5: #ffaa30;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); overflow: hidden; }
+
+/* scanlines */
+body::after {
+  content: ''; position: fixed; inset: 0; z-index: 9998; pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.035) 3px, rgba(0,0,0,0.035) 4px);
+}
+
+/* ── Grid layout ────────────────────────────────────────────────── */
+.app {
+  display: grid;
+  grid-template-rows: 52px 1fr 148px;
+  grid-template-columns: 300px 1fr;
+  height: 100vh;
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+header {
+  grid-column: 1/-1;
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: relative; overflow: hidden;
+}
+header::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--accent) 40%, var(--purple) 70%, transparent 100%);
+  opacity: 0.35;
+}
+.logo {
+  font-family: var(--display); font-size: 17px; font-weight: 800;
+  letter-spacing: 0.12em; color: var(--accent); text-transform: uppercase;
+}
+.logo em { color: var(--purple); font-style: normal; }
+.header-sep { width: 1px; height: 20px; background: var(--border); }
+.header-tag {
+  font-size: 9px; letter-spacing: 0.18em; color: var(--text-dim); text-transform: uppercase;
+}
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 18px; }
+.conn-pill {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 20px;
+  border: 1px solid var(--border2); background: var(--surface2);
+  font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+  transition: border-color 0.3s;
+}
+.conn-pill.connected  { border-color: rgba(0,245,160,0.35); }
+.conn-pill.recording  { border-color: rgba(255,61,92,0.5); }
+.conn-pill.connecting { border-color: rgba(255,170,48,0.4); }
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-muted); transition: background 0.3s, box-shadow 0.3s;
+}
+.conn-pill.connected  .dot { background: var(--green); box-shadow: 0 0 6px var(--green-dim); }
+.conn-pill.recording  .dot { background: var(--red); box-shadow: 0 0 6px var(--red); animation: blink 0.9s infinite; }
+.conn-pill.connecting .dot { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ── Sidebar ─────────────────────────────────────────────────────── */
+aside {
+  grid-row: 2/3;
+  background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden;
+}
+aside::-webkit-scrollbar { width: 3px; }
+aside::-webkit-scrollbar-thumb { background: var(--border2); }
+
+.section {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.section-label {
+  font-size: 8.5px; font-weight: 600; letter-spacing: 0.22em;
+  color: var(--text-muted); text-transform: uppercase; margin-bottom: 12px;
+}
+
+/* ── Model switcher ──────────────────────────────────────────────── */
+.model-grid {
+  display: flex; flex-direction: column; gap: 5px;
+}
+.model-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  position: relative; overflow: hidden;
+}
+.model-card:hover { border-color: var(--border2); background: var(--surface3); }
+.model-card.active {
+  border-color: var(--accent2);
+  background: rgba(0,200,240,0.06);
+}
+.model-card.active::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--accent);
+}
+.model-card.loading-model { border-color: var(--amber); animation: pulse-border 1s infinite; }
+@keyframes pulse-border {
+  0%,100% { border-color: rgba(255,170,48,0.4); }
+  50%      { border-color: rgba(255,170,48,0.9); }
+}
+
+.model-name {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.06em; color: var(--text);
+  flex: 1;
+}
+.model-card.active .model-name { color: var(--accent); }
+
+.model-meta { text-align: right; }
+.model-size { font-size: 8px; color: var(--text-dim); display: block; }
+.model-speed { font-size: 8px; color: var(--text-muted); display: block; margin-top: 1px; }
+
+.model-status-icon {
+  width: 16px; height: 16px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px;
+}
+
+/* quality stars */
+.stars { font-size: 8px; color: var(--text-muted); letter-spacing: -1px; }
+.stars .on { color: var(--amber); }
+
+/* ── Load button ─────────────────────────────────────────────────── */
+.btn-load {
+  width: 100%; margin-top: 10px;
+  padding: 10px; border-radius: 3px;
+  border: 1px solid var(--border2); background: transparent;
+  color: var(--accent); font-family: var(--mono); font-size: 10px;
+  font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+  cursor: pointer; transition: all 0.15s;
+}
+.btn-load:hover:not(:disabled) {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  box-shadow: 0 0 14px rgba(0,200,240,0.12);
+}
+.btn-load:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ── Model status bar ────────────────────────────────────────────── */
+.model-status-bar {
+  padding: 8px 11px; border-radius: 3px; margin-top: 8px;
+  font-size: 9px; letter-spacing: 0.06em;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  display: flex; align-items: center; gap: 8px;
+  min-height: 32px;
+}
+.model-status-bar.ok     { border-color: rgba(0,245,160,0.25); color: var(--green); }
+.model-status-bar.busy   { border-color: rgba(255,170,48,0.3); color: var(--amber); }
+.model-status-bar.error  { border-color: rgba(255,61,92,0.3);  color: var(--red); }
+.model-status-bar.idle   { color: var(--text-dim); }
+
+.spin { display: inline-block; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── VU / Waveform ───────────────────────────────────────────────── */
+canvas#waveform { width: 100%; height: 44px; display: block; }
+.vu-meter { display: flex; align-items: flex-end; gap: 2px; height: 40px; margin-top: 8px; }
+.vu-bar { flex: 1; background: var(--border); border-radius: 1px; min-height: 2px; transition: height 0.06s ease-out, background 0.08s; }
+
+/* ── Record controls ─────────────────────────────────────────────── */
+.controls { display: flex; flex-direction: column; gap: 8px; }
+.btn {
+  width: 100%; padding: 11px; border-radius: 3px;
+  border: 1px solid var(--border2); background: transparent;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.18em; text-transform: uppercase;
+  cursor: pointer; transition: all 0.15s; color: var(--text);
+}
+.btn:disabled { opacity: 0.28; cursor: not-allowed; }
+.btn-start { border-color: rgba(0,245,160,0.4); color: var(--green); }
+.btn-start:hover:not(:disabled) { background: rgba(0,245,160,0.07); box-shadow: 0 0 14px rgba(0,245,160,0.12); }
+.btn-stop  { border-color: rgba(255,61,92,0.4); color: var(--red); }
+.btn-stop:hover:not(:disabled)  { background: rgba(255,61,92,0.07);  box-shadow: 0 0 14px rgba(255,61,92,0.12); }
+
+/* ── Stats ───────────────────────────────────────────────────────── */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 9px 11px; }
+.stat-val { font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--accent); line-height: 1; margin-bottom: 3px; }
+.stat-lbl { font-size: 8px; letter-spacing: 0.12em; color: var(--text-muted); text-transform: uppercase; }
+
+/* ── Session info ────────────────────────────────────────────────── */
+.sess-info { font-size: 9px; color: var(--text-muted); line-height: 2.1; letter-spacing: 0.04em; }
+.sess-info span { color: var(--text-dim); }
+
+/* ── Main / transcript ───────────────────────────────────────────── */
+main {
+  grid-row: 2/3;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.tx-header {
+  padding: 12px 22px 10px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+}
+.tx-title { font-size: 9px; font-weight: 600; letter-spacing: 0.22em; color: var(--text-dim); text-transform: uppercase; }
+.clear-btn {
+  margin-left: auto; background: none; border: 1px solid var(--border);
+  color: var(--text-dim); font-family: var(--mono); font-size: 8.5px;
+  letter-spacing: 0.1em; padding: 3px 9px; cursor: pointer; border-radius: 2px; transition: all 0.15s;
+}
+.clear-btn:hover { border-color: var(--border2); color: var(--text); }
+
+.tx-body { flex: 1; overflow-y: auto; padding: 22px 26px; scroll-behavior: smooth; }
+.tx-body::-webkit-scrollbar { width: 3px; }
+.tx-body::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.tx-content {
+  font-family: var(--display); font-size: 19px; font-weight: 400;
+  line-height: 1.8; color: var(--text); max-width: 860px;
+}
+
+/* Tokens */
+.tok { display: inline; transition: color 0.25s, opacity 0.25s; }
+.tok.interim { color: var(--interim); opacity: 0.72; border-bottom: 1px dotted rgba(96,216,248,0.3); }
+.tok.final   { color: var(--final); opacity: 1; border-bottom: none; }
+.tok[data-tip] { cursor: default; position: relative; }
+.tok[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute; bottom: calc(100% + 5px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; background: var(--surface3); border: 1px solid var(--border2);
+  color: var(--text-dim); font-family: var(--mono); font-size: 8.5px;
+  padding: 3px 8px; border-radius: 2px; pointer-events: none; z-index: 200; letter-spacing: 0.05em;
+}
+
+.empty-state {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px; opacity: 0.3;
+}
+.empty-icon { font-size: 28px; }
+.empty-lbl  { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dim); }
+
+/* ── Whisper loading overlay on transcript ──────────────────────── */
+.processing-badge {
+  display: none; align-items: center; gap: 8px;
+  position: absolute; top: 10px; right: 18px;
+  background: var(--surface3); border: 1px solid var(--border2);
+  padding: 5px 12px; border-radius: 20px;
+  font-size: 9px; letter-spacing: 0.1em; color: var(--amber);
+}
+.processing-badge.visible { display: flex; }
+main { position: relative; }
+
+/* ── Footer timeline ─────────────────────────────────────────────── */
+footer {
+  grid-column: 1/-1;
+  border-top: 1px solid var(--border); background: var(--surface);
+  padding: 10px 20px; display: flex; flex-direction: column; gap: 7px;
+}
+.track { display: flex; align-items: center; gap: 10px; }
+.track-lbl { font-size: 8.5px; letter-spacing: 0.1em; color: var(--text-muted); width: 78px; flex-shrink: 0; }
+.track-wrap { flex: 1; height: 5px; background: var(--surface2); border-radius: 3px; overflow: hidden; border: 1px solid var(--border); }
+.track-fill { height: 100%; width: 0%; border-radius: 3px; transition: width 0.25s ease-out; }
+.tf-final { background: linear-gradient(90deg, var(--green-dim), var(--green)); }
+.tf-total  { background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+.track-ms  { font-size: 8.5px; color: var(--text-dim); width: 68px; text-align: right; font-family: var(--mono); }
+
+.log-strip { display: flex; gap: 6px; overflow: hidden; align-items: center; margin-top: 2px; }
+.log-badge {
+  font-size: 8.5px; padding: 2px 7px; border-radius: 2px; letter-spacing: 0.05em;
+  flex-shrink: 0; opacity: 0; transform: translateY(3px);
+  animation: fadein 0.2s forwards;
+}
+@keyframes fadein { to { opacity: 1; transform: translateY(0); } }
+.log-badge.info    { background: rgba(0,200,240,0.1); color: var(--accent);  border: 1px solid rgba(0,200,240,0.2); }
+.log-badge.success { background: rgba(0,245,160,0.1); color: var(--green);   border: 1px solid rgba(0,245,160,0.2); }
+.log-badge.warn    { background: rgba(255,170,48,0.1); color: var(--amber);  border: 1px solid rgba(255,170,48,0.2); }
+.log-badge.error   { background: rgba(255,61,92,0.1);  color: var(--red);    border: 1px solid rgba(255,61,92,0.2); }
+.log-badge.purple  { background: rgba(167,139,250,0.1);color: var(--purple); border: 1px solid rgba(167,139,250,0.2); }
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- HEADER -->
+<header>
+  <div class="logo">VOX<em>STREAM</em></div>
+  <div class="header-sep"></div>
+  <div class="header-tag">Local Whisper Engine</div>
+  <div class="header-right">
+    <div class="conn-pill" id="conn-pill">
+      <span class="dot" id="conn-dot"></span>
+      <span id="conn-text">DISCONNECTED</span>
+    </div>
+    <div style="font-size:8.5px;color:var(--text-muted);letter-spacing:0.08em;">PCM·INT16·16kHz·60ms</div>
+  </div>
+</header>
+
+<!-- SIDEBAR -->
+<aside id="sidebar">
+
+  <!-- MODEL SELECTOR -->
+  <div class="section">
+    <div class="section-label">Whisper Model</div>
+    <div class="model-grid" id="model-grid">
+      <!-- populated by JS -->
+    </div>
+    <button class="btn-load" id="btn-load-model">⬇ LOAD SELECTED MODEL</button>
+    <div class="model-status-bar idle" id="model-status-bar">
+      <span>No model loaded</span>
+    </div>
+  </div>
+
+  <!-- WAVEFORM + VU -->
+  <div class="section">
+    <div class="section-label">Audio Input</div>
+    <canvas id="waveform"></canvas>
+    <div class="vu-meter" id="vu-meter"></div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="section">
+    <div class="section-label">Recording</div>
+    <div class="controls">
+      <button class="btn btn-start" id="btn-start" disabled>▶ START TRANSCRIBING</button>
+      <button class="btn btn-stop"  id="btn-stop"  disabled>■ STOP</button>
+    </div>
+  </div>
+
+  <!-- STATS -->
+  <div class="section">
+    <div class="section-label">Live Stats</div>
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-val" id="stat-tok">0</div><div class="stat-lbl">Tokens</div></div>
+      <div class="stat"><div class="stat-val" id="stat-wrd">0</div><div class="stat-lbl">Words</div></div>
+      <div class="stat"><div class="stat-val" id="stat-conf">—</div><div class="stat-lbl">Avg Conf</div></div>
+      <div class="stat"><div class="stat-val" id="stat-lang">—</div><div class="stat-lbl">Language</div></div>
+    </div>
+  </div>
+
+  <!-- SESSION -->
+  <div class="section">
+    <div class="section-label">Session</div>
+    <div class="sess-info">
+      ID&nbsp;&nbsp;&nbsp;<span id="inf-sid">—</span><br/>
+      MODEL&nbsp;<span id="inf-model">—</span><br/>
+      CHUNKS&nbsp;<span id="inf-chunks">0</span><br/>
+      AUDIO&nbsp;<span id="inf-audio">0 ms</span>
+    </div>
+  </div>
+
+</aside>
+
+<!-- TRANSCRIPT -->
+<main>
+  <div class="tx-header">
+    <div class="tx-title">Live Transcript</div>
+    <button class="clear-btn" id="btn-clear">CLEAR</button>
+  </div>
+  <div class="processing-badge" id="processing-badge">
+    <span class="spin">⟳</span> Whisper processing…
+  </div>
+  <div class="tx-body" id="tx-body">
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">🎙</div>
+      <div class="empty-lbl">Load a model, then start recording</div>
+    </div>
+    <div class="tx-content" id="tx-content"></div>
+  </div>
+</main>
+
+<!-- TIMELINE FOOTER -->
+<footer>
+  <div class="track">
+    <div class="track-lbl">FINALIZED</div>
+    <div class="track-wrap"><div class="track-fill tf-final" id="bar-final"></div></div>
+    <div class="track-ms" id="ms-final">0 ms</div>
+  </div>
+  <div class="track">
+    <div class="track-lbl">TOTAL PROC</div>
+    <div class="track-wrap"><div class="track-fill tf-total" id="bar-total"></div></div>
+    <div class="track-ms" id="ms-total">0 ms</div>
+  </div>
+  <div class="log-strip" id="log-strip"></div>
+</footer>
+
+</div><!-- .app -->
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   VOXSTREAM FRONTEND — Whisper Edition
+   ═══════════════════════════════════════════════════════════════════ */
+
+const SAMPLE_RATE    = 16000;
+const CHUNK_SAMPLES  = 1024; // 60 ms
+const WS_URL         = `ws://${location.host}/ws/transcribe`;
+
+// ── State ─────────────────────────────────────────────────────────
+let ws = null, audioCtx = null, mediaStream = null, processor = null, analyser = null;
+const tokenMap = new Map(), tokenOrder = [];
+let sessionId = null, totalChunks = 0, totalAudioMs = 0, maxAudioMs = 1;
+let selectedModel = null, loadedModel = null;
+let _lastHash = '';
+let _pollTimer = null; // model-load poll
+
+// ── DOM ────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const btnStart    = $('btn-start');
+const btnStop     = $('btn-stop');
+const btnClear    = $('btn-clear');
+const btnLoad     = $('btn-load-model');
+const connPill    = $('conn-pill');
+const connText    = $('conn-text');
+const emptyState  = $('empty-state');
+const txContent   = $('tx-content');
+const txBody      = $('tx-body');
+const modelGrid   = $('model-grid');
+const modelBar    = $('model-status-bar');
+const procBadge   = $('processing-badge');
+
+// ── Model data (mirrors server WHISPER_MODELS) ─────────────────────
+const MODELS = {
+  "tiny":     { size: "~75 MB",  speed: "~32x real-time", stars: 1 },
+  "base":     { size: "~142 MB", speed: "~16x real-time", stars: 2 },
+  "small":    { size: "~466 MB", speed: "~6x real-time",  stars: 3 },
+  "medium":   { size: "~1.5 GB", speed: "~2x real-time",  stars: 4 },
+  "large-v2": { size: "~3.1 GB", speed: "~1x real-time",  stars: 5 },
+  "large-v3": { size: "~3.1 GB", speed: "~1x real-time",  stars: 5 },
+};
+
+// ── Build model cards ─────────────────────────────────────────────
+function renderModelCards(activeModel) {
+  modelGrid.innerHTML = '';
+  for (const [name, info] of Object.entries(MODELS)) {
+    const card = document.createElement('div');
+    card.className = 'model-card' + (name === activeModel ? ' active' : '');
+    card.dataset.model = name;
+
+    const starsOn  = '★'.repeat(info.stars);
+    const starsOff = '☆'.repeat(5 - info.stars);
+    const icon = name === loadedModel ? '✓' : (name === selectedModel ? '◉' : '○');
+
+    card.innerHTML = `
+      <div class="model-status-icon">${icon}</div>
+      <div class="model-name">${name}</div>
+      <div class="model-meta">
+        <span class="model-size">${info.size}</span>
+        <span class="model-speed">${info.speed}</span>
+      </div>
+      <div class="stars">
+        <span class="on">${starsOn}</span>${starsOff}
+      </div>`;
+
+    card.addEventListener('click', () => {
+      selectedModel = name;
+      renderModelCards(name);
+      btnLoad.disabled = (name === loadedModel);
+    });
+    modelGrid.appendChild(card);
+  }
+}
+
+function setModelStatus(state, msg) {
+  modelBar.className = 'model-status-bar ' + state;
+  modelBar.innerHTML = state === 'busy'
+    ? `<span class="spin">⟳</span> ${msg}`
+    : msg;
+}
+
+// ── Poll server for model status ──────────────────────────────────
+async function fetchModelStatus() {
+  try {
+    const r    = await fetch('/api/models');
+    const data = await r.json();
+    const prev = loadedModel;
+    loadedModel = data.loaded_model || null;
+
+    if (data.loading) {
+      setModelStatus('busy', `Loading ${data.loaded_model || selectedModel || ''}…`);
+      btnStart.disabled = true;
+    } else if (data.error) {
+      setModelStatus('error', '✗ ' + data.error);
+      btnStart.disabled = true;
+      clearInterval(_pollTimer); _pollTimer = null;
+    } else if (loadedModel) {
+      setModelStatus('ok', `✓ ${loadedModel} ready`);
+      $('inf-model').textContent = loadedModel;
+      btnLoad.disabled = (selectedModel === loadedModel);
+      btnStart.disabled = false;
+      if (prev !== loadedModel) {
+        log(`Model ${loadedModel} loaded`, 'success');
+        clearInterval(_pollTimer); _pollTimer = null;
+      }
+    } else {
+      setModelStatus('idle', 'No model loaded');
+      btnStart.disabled = true;
+    }
+    renderModelCards(selectedModel || loadedModel);
+  } catch(e) {
+    // server might not be up yet
+  }
+}
+
+// ── Load model button ─────────────────────────────────────────────
+btnLoad.addEventListener('click', async () => {
+  if (!selectedModel) return;
+  btnLoad.disabled = true;
+  setModelStatus('busy', `Loading ${selectedModel}…`);
+  log(`Loading ${selectedModel}`, 'purple');
+
+  try {
+    await fetch(`/api/models/${selectedModel}/load`, { method: 'POST' });
+    // Start polling until load is complete
+    if (_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = setInterval(fetchModelStatus, 1200);
+  } catch(e) {
+    setModelStatus('error', 'Request failed');
+    btnLoad.disabled = false;
+  }
+});
+
+// ── WebSocket ────────────────────────────────────────────────────
+function connectWS(onReady) {
+  setConn('connecting');
+  log('Connecting…', 'info');
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => { setConn('connected'); log('Socket open', 'success'); };
+  ws.onmessage = ev => {
+    if (typeof ev.data !== 'string') return;
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'session_init') {
+      sessionId = msg.session_id;
+      $('inf-sid').textContent = sessionId.slice(0, 8) + '…';
+      onReady?.();
+      return;
+    }
+    if (Array.isArray(msg)) {
+      procBadge.classList.remove('visible');
+      for (const r of msg) ingestResult(r);
+    }
+  };
+  ws.onerror = () => { log('Socket error', 'error'); setConn('disconnected'); };
+  ws.onclose = () => { setConn('disconnected'); log('Disconnected', 'warn'); };
+}
+
+// ── Audio capture ─────────────────────────────────────────────────
+const NUM_BARS = 22;
+const vuMeter  = $('vu-meter');
+const canvas   = $('waveform');
+const ctx2d    = canvas.getContext('2d');
+const vuBars   = [];
+let rafId = null, freqData = null, waveData = null;
+
+for (let i = 0; i < NUM_BARS; i++) {
+  const b = document.createElement('div');
+  b.className = 'vu-bar'; vuMeter.appendChild(b); vuBars.push(b);
+}
+
+function drawAudio() {
+  rafId = requestAnimationFrame(drawAudio);
+  if (!analyser) return;
+  analyser.getByteFrequencyData(freqData);
+  analyser.getByteTimeDomainData(waveData);
+  const bpb = Math.floor(freqData.length / NUM_BARS);
+  for (let i = 0; i < NUM_BARS; i++) {
+    let s = 0;
+    for (let b = 0; b < bpb; b++) s += freqData[i*bpb+b];
+    const p = Math.pow(s/bpb/255, 0.55);
+    vuBars[i].style.height = Math.max(2, p*40) + 'px';
+    vuBars[i].style.background = p > 0.02 ? `hsl(${185+i*2},100%,${38+p*54}%)` : 'var(--border)';
+  }
+  const W = canvas.width = canvas.offsetWidth * devicePixelRatio;
+  const H = canvas.height = canvas.offsetHeight * devicePixelRatio;
+  ctx2d.clearRect(0,0,W,H);
+  ctx2d.beginPath();
+  ctx2d.strokeStyle = 'rgba(0,200,240,0.5)';
+  ctx2d.lineWidth = devicePixelRatio;
+  const sw = W / waveData.length;
+  let x = 0;
+  for (let i = 0; i < waveData.length; i++) {
+    const y = (waveData[i]/128)*H/2;
+    i===0 ? ctx2d.moveTo(x,y) : ctx2d.lineTo(x,y); x+=sw;
+  }
+  ctx2d.stroke();
+}
+
+async function startCapture() {
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: { sampleRate: SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+  });
+  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  const src = audioCtx.createMediaStreamSource(mediaStream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.8;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+  waveData = new Uint8Array(analyser.fftSize);
+  src.connect(analyser);
+
+  processor = audioCtx.createScriptProcessor(CHUNK_SAMPLES, 1, 1);
+  src.connect(processor);
+  processor.connect(audioCtx.destination);
+  let buf = new Float32Array(0);
+
+  processor.onaudioprocess = e => {
+    const f32 = e.inputBuffer.getChannelData(0);
+    const tmp = new Float32Array(buf.length + f32.length);
+    tmp.set(buf); tmp.set(f32, buf.length); buf = tmp;
+    while (buf.length >= CHUNK_SAMPLES) {
+      const chunk = buf.slice(0, CHUNK_SAMPLES); buf = buf.slice(CHUNK_SAMPLES);
+      const i16 = new Int16Array(chunk.length);
+      for (let i = 0; i < chunk.length; i++) {
+        const c = Math.max(-1, Math.min(1, chunk[i]));
+        i16[i] = c < 0 ? c*32768 : c*32767;
+      }
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(i16.buffer);
+        totalChunks++;
+        totalAudioMs += 60;
+        $('inf-chunks').textContent = totalChunks;
+        $('inf-audio').textContent  = totalAudioMs + ' ms';
+        // Show "Whisper processing" badge every 3 s burst
+        if (totalChunks % 50 === 0) procBadge.classList.add('visible');
+      }
+    }
+  };
+  rafId = requestAnimationFrame(drawAudio);
+}
+
+function stopCapture() {
+  processor?.disconnect(); analyser?.disconnect();
+  mediaStream?.getTracks().forEach(t => t.stop());
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  processor = mediaStream = analyser = null;
+  vuBars.forEach(b => { b.style.height = '2px'; b.style.background = 'var(--border)'; });
+  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+// ── Token ingestion ───────────────────────────────────────────────
+function makeId(tok) { return `${tok.start_ms}__${tok.text.trim().slice(0,14)}`; }
+
+function ingestResult(result) {
+  const { tokens, audio_offset_ms, final_audio_proc_ms, total_audio_proc_ms } = result;
+  maxAudioMs = Math.max(maxAudioMs, total_audio_proc_ms, 1);
+  $('bar-final').style.width = Math.min(100, final_audio_proc_ms/maxAudioMs*100) + '%';
+  $('bar-total').style.width = Math.min(100, total_audio_proc_ms/maxAudioMs*100)  + '%';
+  $('ms-final').textContent  = final_audio_proc_ms + ' ms';
+  $('ms-total').textContent  = total_audio_proc_ms  + ' ms';
+
+  const toDelete = [];
+  for (const [id, t] of tokenMap) {
+    if (t.start_ms >= (audio_offset_ms || 0)) {
+      toDelete.push(id);
+    }
+  }
+  for (const id of toDelete) {
+    tokenMap.delete(id);
+    const idx = tokenOrder.indexOf(id);
+    if (idx !== -1) tokenOrder.splice(idx, 1);
+  }
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    const id = `${tok.start_ms}__${i}__${Math.random().toString(36).slice(2, 7)}`;
+    tokenMap.set(id, {...tok, _id: id});
+    tokenOrder.push(id);
+  }
+
+  tokenOrder.sort((a, b) => (tokenMap.get(a)?.start_ms || 0) - (tokenMap.get(b)?.start_ms || 0));
+
+  renderTranscript(); updateStats();
+}
+
+// ── Renderer ──────────────────────────────────────────────────────
+function renderTranscript() {
+  const toks = tokenOrder.map(id => tokenMap.get(id)).filter(Boolean);
+  if (!toks.length) return;
+  emptyState.style.display = 'none';
+
+  const hash = toks.map(t => `${t._id}:${t.is_final}:${t.text}`).join('|');
+  if (hash === _lastHash) return;
+  _lastHash = hash;
+
+  const existing = txContent.querySelectorAll('.tok');
+  const exMap = new Map(); existing.forEach(el => exMap.set(el.dataset.id, el));
+  const frag = document.createDocumentFragment(); const seen = new Set();
+
+  for (const tok of toks) {
+    seen.add(tok._id);
+    let span = exMap.get(tok._id);
+    if (!span) { span = document.createElement('span'); span.dataset.id = tok._id; }
+    span.className = `tok ${tok.is_final ? 'final' : 'interim'}`;
+    span.textContent = tok.text;
+    const c = (tok.confidence*100).toFixed(1);
+    span.dataset.tip = `${c}% · ${tok.language} · ${tok.start_ms}→${tok.end_ms}ms`;
+    frag.appendChild(span);
+  }
+  existing.forEach(el => { if (!seen.has(el.dataset.id)) el.remove(); });
+  txContent.appendChild(frag);
+  txBody.scrollTop = txBody.scrollHeight;
+}
+
+function updateStats() {
+  const toks = [...tokenMap.values()];
+  const words = toks.filter(t => t.text.trim()).length;
+  const conf  = toks.length ? (toks.reduce((s,t)=>s+t.confidence,0)/toks.length).toFixed(2) : '—';
+  const lang  = toks.length ? toks[toks.length-1].language : '—';
+  $('stat-tok').textContent  = toks.length;
+  $('stat-wrd').textContent  = words;
+  $('stat-conf').textContent = conf;
+  $('stat-lang').textContent = lang.toUpperCase();
+}
+
+// ── Connection status ─────────────────────────────────────────────
+function setConn(state) {
+  connPill.className = 'conn-pill ' + state;
+  connText.textContent = state.toUpperCase();
+}
+
+// ── Log strip ─────────────────────────────────────────────────────
+function log(msg, type='info') {
+  const strip = $('log-strip');
+  const b = document.createElement('div');
+  b.className = `log-badge ${type}`; b.textContent = msg;
+  strip.appendChild(b);
+  while (strip.children.length > 7) strip.removeChild(strip.firstChild);
+}
+
+// ── Button handlers ───────────────────────────────────────────────
+btnStart.addEventListener('click', () => {
+  if (!loadedModel) { log('Load a model first', 'warn'); return; }
+  btnStart.disabled = true; btnStop.disabled = false;
+
+  connectWS(async () => {
+    try {
+      await startCapture();
+      setConn('recording');
+      log('Recording…', 'success');
+    } catch(e) {
+      log('Mic error: ' + e.message, 'error');
+      setConn('connected');
+      btnStart.disabled = false; btnStop.disabled = true;
+    }
+  });
+});
+
+btnStop.addEventListener('click', () => {
+  stopCapture(); ws?.close(); ws = null;
+  setConn('disconnected');
+  btnStart.disabled = false; btnStop.disabled = true;
+  procBadge.classList.remove('visible');
+  log('Stopped', 'warn');
+  totalChunks = 0; totalAudioMs = 0;
+  $('inf-chunks').textContent = '0'; $('inf-audio').textContent = '0 ms';
+});
+
+btnClear.addEventListener('click', () => {
+  tokenMap.clear(); tokenOrder.length = 0;
+  txContent.innerHTML = ''; _lastHash = '';
+  emptyState.style.display = '';
+  updateStats();
+  $('bar-final').style.width = '0%'; $('bar-total').style.width = '0%';
+  $('ms-final').textContent = '0 ms'; $('ms-total').textContent = '0 ms';
+  log('Cleared', 'info');
+});
+
+// ── Init ──────────────────────────────────────────────────────────
+(async function init() {
+  // Pre-select large-v3, best default
+  selectedModel = 'large-v3';
+  renderModelCards(selectedModel);
+  await fetchModelStatus();
+  // Keep polling server status every 5 s to stay in sync
+  setInterval(fetchModelStatus, 5000);
+})();
+</script>
+</body>
+</html>
