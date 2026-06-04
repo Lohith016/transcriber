@@ -255,13 +255,24 @@ def _synthesise_blocking(text: str, voice: str, speed: float, out_q: queue.Queue
         def run_inference():
             if use_autocast:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    return list(active_pipe(text, voice=voice, speed=speed))
+                    yield from active_pipe(text, voice=voice, speed=speed)
             else:
-                return list(active_pipe(text, voice=voice, speed=speed))
+                yield from active_pipe(text, voice=voice, speed=speed)
 
         results = run_inference()
 
-        for graphemes, phonemes, audio_np in results:
+        for res in results:
+            # Handle both backward compatibility unpacking and Result object
+            if isinstance(res, tuple):
+                graphemes, phonemes, audio_np = res
+                m_tokens = None
+            else:
+                graphemes = res.graphemes
+                phonemes = res.phonemes
+                audio_np = res.audio
+                m_tokens = getattr(res, "tokens", None)
+
+            t_cursor_ms = 0
             if audio_np is None or len(audio_np) == 0:
                 continue
 
@@ -273,21 +284,57 @@ def _synthesise_blocking(text: str, voice: str, speed: float, out_q: queue.Queue
             if not chunk_words:
                 chunk_words = [""]
 
-            ms_per_word = chunk_ms / max(len(chunk_words), 1)
+            chunk_words_count = len(chunk_words) if chunk_words else 1
+            peek_tokens = all_tokens[words_done : words_done + chunk_words_count]
 
-            # Emit word tokens timed within this audio chunk
-            for _ in chunk_words:
-                if words_done < total_words:
-                    tok = all_tokens[words_done]
+            if m_tokens and len(m_tokens) > 0:
+                m_idx = 0
+                for tok in peek_tokens:
+                    tok_w = tok["word"].lower().strip(",.!?\"'()[]{}:;")
+                    assigned_ts = None
+                    
+                    if tok_w:
+                        search_idx = m_idx
+                        while search_idx < len(m_tokens):
+                            mt = m_tokens[search_idx]
+                            mt_w = getattr(mt, "text", "").lower().strip(",.!?\"'()[]{}:;")
+                            if mt_w and (mt_w in tok_w or tok_w in mt_w):
+                                assigned_ts = getattr(mt, "start_ts", None)
+                                m_idx = search_idx + 1
+                                break
+                            search_idx += 1
+                    
+                    if assigned_ts is not None:
+                        t_ms = int(assigned_ts * 1000)
+                        t_cursor_ms = t_ms
+                    else:
+                        t_ms = t_cursor_ms
+                        
                     out_q.put({
                         "type":  "token",
                         "word":  tok["word"],
                         "index": tok["index"],
-                        "t_ms":  t_cursor_ms,
+                        "t_ms":  t_ms,
                         "total": total_words,
                     })
-                    t_cursor_ms += int(ms_per_word)
-                    words_done  += 1
+                    words_done += 1
+            else:
+                # Fallback to proportional calculation
+                total_chars = sum(len(tok["word"]) + 1 for tok in peek_tokens)
+                ms_per_char = chunk_ms / max(total_chars, 1)
+
+                for _ in chunk_words:
+                    if words_done < total_words:
+                        tok = all_tokens[words_done]
+                        out_q.put({
+                            "type":  "token",
+                            "word":  tok["word"],
+                            "index": tok["index"],
+                            "t_ms":  t_cursor_ms,
+                            "total": total_words,
+                        })
+                        t_cursor_ms += int((len(tok["word"]) + 1) * ms_per_char)
+                        words_done  += 1
 
             # Encode PCM float32 as base64 for browser AudioContext
             pcm_bytes = audio_np.tobytes()
