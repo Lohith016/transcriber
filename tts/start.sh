@@ -10,7 +10,13 @@ echo
 # Create virtual environment if it doesn't exist
 if [ ! -d ".venv" ]; then
     echo " [INFO] Creating virtual environment..."
-    python3 -m venv .venv
+    if command -v python3.12 >/dev/null 2>&1; then
+        python3.12 -m venv .venv
+    elif command -v python3.11 >/dev/null 2>&1; then
+        python3.11 -m venv .venv
+    else
+        python3 -m venv .venv
+    fi
 fi
 
 # Activate virtual environment
