@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>VOXCAST — Real-Time Text to Speech</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+/* ── Reset ─────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#05080c; --sf:#0b1018; --sf2:#101820; --sf3:#162030; --sf4:#1e2d42;
+  --br:#1a2d42; --br2:#243d5a; --br3:#2d5070;
+  --accent:#00c8f0; --a2:#008ab0; --aglow:rgba(0,200,240,.12);
+  --green:#00f5a0; --gd:#00c078; --red:#ff3d5c; --amber:#ffaa30;
+  --purple:#a78bfa; --pink:#f472b6; --orange:#fb923c;
+  --text:#c4d8ee; --td:#4d7090; --tm:#243348;
+  --mono:'IBM Plex Mono',monospace; --display:'Syne',sans-serif;
+  --interim:#7de8ff; --final:#e2f0ff; --spoken:#ffffff;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--mono);overflow:hidden}
+body::after{content:'';position:fixed;inset:0;z-index:9998;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,.03) 3px,rgba(0,0,0,.03) 4px)}
+
+/* ── Layout ─────────────────────────────────────────── */
+.app{display:grid;grid-template-rows:52px 1fr 36px;grid-template-columns:320px 1fr;height:100vh}
+
+/* ── Header ─────────────────────────────────────────── */
+header{
+  grid-column:1/-1;display:flex;align-items:center;gap:14px;
+  padding:0 20px;border-bottom:1px solid var(--br);background:var(--sf);
+  position:relative;overflow:hidden;
+}
+header::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--purple) 30%,var(--accent) 60%,transparent);opacity:.35}
+.logo{font-family:var(--display);font-size:17px;font-weight:800;letter-spacing:.12em;color:var(--purple);text-transform:uppercase}
+.logo em{color:var(--accent);font-style:normal}
+.hsep{width:1px;height:20px;background:var(--br)}
+.htag{font-size:9px;letter-spacing:.18em;color:var(--td);text-transform:uppercase}
+.hright{margin-left:auto;display:flex;align-items:center;gap:16px}
+.gpu-badge{
+  display:flex;align-items:center;gap:7px;
+  padding:4px 10px;border-radius:20px;border:1px solid var(--br2);background:var(--sf2);
+  font-size:9px;letter-spacing:.08em;
+}
+.gpu-dot{width:6px;height:6px;border-radius:50%;background:var(--tm)}
+.gpu-badge.ready .gpu-dot{background:var(--green);box-shadow:0 0 6px var(--gd)}
+.gpu-badge.loading .gpu-dot{background:var(--amber);box-shadow:0 0 6px var(--amber);animation:blink .9s infinite}
+.gpu-badge.error .gpu-dot{background:var(--red)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ── Sidebar ─────────────────────────────────────────── */
+aside{
+  grid-row:2/3;background:var(--sf);border-right:1px solid var(--br);
+  display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;
+}
+aside::-webkit-scrollbar{width:3px}
+aside::-webkit-scrollbar-thumb{background:var(--br2)}
+.sec{padding:15px 17px;border-bottom:1px solid var(--br);flex-shrink:0}
+.sec-label{font-size:8.5px;font-weight:600;letter-spacing:.22em;color:var(--tm);text-transform:uppercase;margin-bottom:11px}
+
+/* ── Load Model Section ─────────────────────────────── */
+.load-panel{display:flex;flex-direction:column;gap:8px}
+.model-info-card{
+  background:var(--sf2);border:1px solid var(--br);border-radius:4px;
+  padding:10px 12px;display:flex;flex-direction:column;gap:5px;
+}
+.mic{font-size:22px;text-align:center;margin-bottom:2px}
+.model-name-big{font-family:var(--display);font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.08em}
+.model-desc{font-size:9px;color:var(--td);line-height:1.6}
+.model-tag{
+  display:inline-block;padding:2px 7px;border-radius:10px;font-size:8px;
+  letter-spacing:.08em;border:1px solid;margin:1px;
+}
+.tag-apache{border-color:rgba(0,245,160,.3);color:var(--green);background:rgba(0,245,160,.05)}
+.tag-gpu{border-color:rgba(0,200,240,.3);color:var(--accent);background:rgba(0,200,240,.05)}
+.tag-fast{border-color:rgba(167,139,250,.3);color:var(--purple);background:rgba(167,139,250,.05)}
+.tag-emo{border-color:rgba(244,114,182,.3);color:var(--pink);background:rgba(244,114,182,.05)}
+
+/* Progress bar */
+.prog-wrap{
+  height:4px;background:var(--sf3);border-radius:2px;overflow:hidden;
+  border:1px solid var(--br);margin-top:2px;
+}
+.prog-fill{height:100%;width:0%;border-radius:2px;transition:width .3s ease-out;
+  background:linear-gradient(90deg,var(--purple),var(--accent))}
+.prog-label{font-size:8.5px;color:var(--td);letter-spacing:.06em;margin-top:3px}
+
+.btn-load{
+  width:100%;padding:11px;border-radius:3px;
+  border:1px solid rgba(167,139,250,.5);background:transparent;
+  color:var(--purple);font-family:var(--mono);font-size:10px;font-weight:600;
+  letter-spacing:.18em;text-transform:uppercase;cursor:pointer;transition:all .15s;
+}
+.btn-load:hover:not(:disabled){background:rgba(167,139,250,.07);box-shadow:0 0 16px rgba(167,139,250,.15);border-color:var(--purple)}
+.btn-load:disabled{opacity:.3;cursor:not-allowed}
+
+/* ── GPU Stats ───────────────────────────────────────── */
+.gpu-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
+.gstat{background:var(--sf2);border:1px solid var(--br);border-radius:3px;padding:8px 10px}
+.gstat-val{font-family:var(--display);font-size:15px;font-weight:700;color:var(--accent);line-height:1;margin-bottom:2px}
+.gstat-lbl{font-size:7.5px;letter-spacing:.1em;color:var(--tm);text-transform:uppercase}
+.vram-bar-wrap{height:3px;background:var(--sf3);border-radius:2px;margin-top:6px;overflow:hidden}
+.vram-bar-fill{height:100%;background:linear-gradient(90deg,var(--gd),var(--green));border-radius:2px;transition:width .5s}
+
+/* ── Voice picker ────────────────────────────────────── */
+.voice-filters{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px}
+.vf-btn{
+  padding:3px 9px;border-radius:10px;border:1px solid var(--br);
+  background:transparent;color:var(--td);font-family:var(--mono);
+  font-size:8px;letter-spacing:.08em;cursor:pointer;transition:all .12s;
+}
+.vf-btn:hover,.vf-btn.active{border-color:var(--br3);color:var(--text);background:var(--sf3)}
+
+.voice-grid{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
+.voice-grid::-webkit-scrollbar{width:2px}
+.voice-grid::-webkit-scrollbar-thumb{background:var(--br2)}
+.voice-card{
+  display:flex;align-items:center;gap:9px;padding:8px 10px;
+  border:1px solid var(--br);border-radius:3px;background:var(--sf2);
+  cursor:pointer;transition:all .12s;position:relative;overflow:hidden;
+}
+.voice-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);transition:width .15s}
+.voice-card:hover{border-color:var(--br2);background:var(--sf3)}
+.voice-card.selected{border-color:var(--a2);background:rgba(0,200,240,.05)}
+.voice-card.selected::before{width:2px}
+.voice-avatar{
+  width:28px;height:28px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;border:1px solid;
+}
+.av-f{background:rgba(244,114,182,.1);border-color:rgba(244,114,182,.3);color:var(--pink)}
+.av-m{background:rgba(0,200,240,.1);border-color:rgba(0,200,240,.3);color:var(--accent)}
+.voice-info{flex:1;min-width:0}
+.voice-nm{font-size:10px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.voice-card.selected .voice-nm{color:var(--accent)}
+.voice-style{font-size:8px;color:var(--td);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.voice-meta{text-align:right;flex-shrink:0}
+.voice-lang{font-size:7.5px;color:var(--tm);letter-spacing:.06em}
+.voice-stars{font-size:8px;letter-spacing:-1px;color:var(--tm)}
+.voice-stars .on{color:var(--amber)}
+
+/* ── Speed control ───────────────────────────────────── */
+.speed-row{display:flex;align-items:center;gap:10px}
+.speed-slider{
+  flex:1;-webkit-appearance:none;appearance:none;
+  height:3px;background:var(--sf3);border-radius:2px;outline:none;
+  border:1px solid var(--br);
+}
+.speed-slider::-webkit-slider-thumb{
+  -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--bg);cursor:pointer;
+  box-shadow:0 0 6px var(--aglow);
+}
+.speed-val{font-size:10px;color:var(--accent);width:30px;text-align:right}
+
+/* ── Main ────────────────────────────────────────────── */
+main{grid-row:2/3;display:flex;flex-direction:column;overflow:hidden}
+
+.tx-header{
+  padding:12px 22px 10px;border-bottom:1px solid var(--br);
+  display:flex;align-items:center;gap:12px;flex-shrink:0;
+}
+.tx-title{font-size:9px;font-weight:600;letter-spacing:.22em;color:var(--td);text-transform:uppercase}
+.hdr-btns{margin-left:auto;display:flex;gap:6px}
+.sm-btn{
+  background:none;border:1px solid var(--br);color:var(--td);
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;
+  padding:3px 10px;cursor:pointer;border-radius:2px;transition:all .15s;
+}
+.sm-btn:hover{border-color:var(--br2);color:var(--text)}
+
+/* ── Input area ──────────────────────────────────────── */
+.input-area{
+  padding:16px 22px 12px;border-bottom:1px solid var(--br);flex-shrink:0;
+  display:flex;flex-direction:column;gap:10px;
+}
+.text-input{
+  width:100%;min-height:80px;max-height:180px;resize:vertical;
+  background:var(--sf2);border:1px solid var(--br);border-radius:4px;
+  color:var(--text);font-family:var(--display);font-size:15px;
+  line-height:1.6;padding:12px 14px;outline:none;
+  transition:border-color .15s;
+}
+.text-input::placeholder{color:var(--tm)}
+.text-input:focus{border-color:var(--br3)}
+.input-actions{display:flex;align-items:center;gap:10px}
+.char-count{font-size:9px;color:var(--tm);letter-spacing:.06em}
+.btn-speak{
+  margin-left:auto;padding:10px 22px;border-radius:3px;
+  border:1px solid rgba(0,200,240,.5);background:transparent;
+  color:var(--accent);font-family:var(--mono);font-size:10px;font-weight:600;
+  letter-spacing:.2em;text-transform:uppercase;cursor:pointer;transition:all .15s;
+  display:flex;align-items:center;gap:8px;
+}
+.btn-speak:hover:not(:disabled){
+  background:var(--aglow);border-color:var(--accent);
+  box-shadow:0 0 20px rgba(0,200,240,.18);
+}
+.btn-speak:disabled{opacity:.3;cursor:not-allowed}
+.btn-speak.speaking{
+  border-color:rgba(255,61,92,.5);color:var(--red);
+  animation:speak-pulse 1.2s infinite;
+}
+@keyframes speak-pulse{0%,100%{box-shadow:0 0 0 rgba(255,61,92,0)}50%{box-shadow:0 0 16px rgba(255,61,92,.25)}}
+
+/* ── Transcript panel ────────────────────────────────── */
+.tx-body{flex:1;overflow-y:auto;padding:24px 26px;scroll-behavior:smooth}
+.tx-body::-webkit-scrollbar{width:3px}
+.tx-body::-webkit-scrollbar-thumb{background:var(--br2);border-radius:2px}
+
+.tx-content{
+  font-family:var(--display);font-size:22px;font-weight:400;
+  line-height:1.85;max-width:900px;
+}
+
+/* Word tokens */
+.word-tok{
+  display:inline;cursor:default;
+  transition:color .08s, text-shadow .08s, opacity .08s;
+}
+.word-tok.pending{color:var(--tm);opacity:.5}
+.word-tok.current{
+  color:var(--spoken);
+  text-shadow:0 0 18px rgba(0,200,240,.7), 0 0 36px rgba(0,200,240,.3);
+  font-weight:600;
+}
+.word-tok.spoken{color:var(--final);opacity:1}
+
+/* Tooltip on hover */
+.word-tok[data-tip]{position:relative}
+.word-tok[data-tip]:hover::after{
+  content:attr(data-tip);
+  position:absolute;bottom:calc(100% + 5px);left:50%;transform:translateX(-50%);
+  white-space:nowrap;background:var(--sf3);border:1px solid var(--br2);
+  color:var(--td);font-family:var(--mono);font-size:8.5px;
+  padding:3px 8px;border-radius:2px;pointer-events:none;z-index:200;
+}
+
+/* Cursor blink when speaking */
+.speaking-cursor{
+  display:inline-block;width:2px;height:1em;
+  background:var(--accent);margin-left:4px;vertical-align:middle;
+  animation:cursor-blink .6s infinite;border-radius:1px;
+}
+@keyframes cursor-blink{0%,100%{opacity:1}50%{opacity:0}}
+
+.empty-state{
+  height:100%;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:16px;opacity:.25;
+}
+.ei{font-size:32px}
+.el{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--td)}
+
+/* ── Waveform / audio visualiser ─────────────────────── */
+.wave-bar{
+  position:absolute;bottom:0;left:0;right:0;
+  height:48px;overflow:hidden;pointer-events:none;
+  background:linear-gradient(to top,var(--sf),transparent);
+}
+canvas#wave{width:100%;height:48px;display:block;opacity:.7}
+main{position:relative}
+
+/* ── Quick presets ───────────────────────────────────── */
+.preset-row{display:flex;gap:5px;flex-wrap:wrap}
+.preset-chip{
+  padding:4px 10px;border-radius:10px;border:1px solid var(--br);
+  background:var(--sf2);color:var(--td);font-family:var(--mono);
+  font-size:8px;letter-spacing:.06em;cursor:pointer;transition:all .12s;
+}
+.preset-chip:hover{border-color:var(--br3);color:var(--text);background:var(--sf3)}
+
+/* ── Status bar ─────────────────────────────────────── */
+footer{
+  grid-column:1/-1;border-top:1px solid var(--br);background:var(--sf);
+  display:flex;align-items:center;gap:16px;padding:0 18px;
+  font-size:8.5px;color:var(--tm);letter-spacing:.06em;
+}
+.status-item{display:flex;align-items:center;gap:5px}
+.status-item span{color:var(--td)}
+.log-strip{display:flex;gap:5px;overflow:hidden;margin-left:auto}
+.log-b{
+  padding:2px 7px;border-radius:2px;font-size:8px;letter-spacing:.05em;
+  flex-shrink:0;opacity:0;transform:translateY(2px);animation:fadein .2s forwards;
+}
+@keyframes fadein{to{opacity:1;transform:translateY(0)}}
+.log-b.info  {background:rgba(0,200,240,.1);color:var(--accent);border:1px solid rgba(0,200,240,.2)}
+.log-b.ok    {background:rgba(0,245,160,.1);color:var(--green); border:1px solid rgba(0,245,160,.2)}
+.log-b.warn  {background:rgba(255,170,48,.1);color:var(--amber);border:1px solid rgba(255,170,48,.2)}
+.log-b.err   {background:rgba(255,61,92,.1); color:var(--red);  border:1px solid rgba(255,61,92,.2)}
+.log-b.pur   {background:rgba(167,139,250,.1);color:var(--purple);border:1px solid rgba(167,139,250,.2)}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ── HEADER ──────────────────────────────────────────── -->
+<header>
+  <div class="logo">VOX<em>CAST</em></div>
+  <div class="hsep"></div>
+  <div class="htag">Kokoro · GPU · Real-Time TTS</div>
+  <div class="hright">
+    <div id="gpu-badge" class="gpu-badge">
+      <span class="gpu-dot"></span>
+      <span id="gpu-text">NOT LOADED</span>
+    </div>
+    <div id="gpu-mem" style="font-size:8.5px;color:var(--td);letter-spacing:.06em"></div>
+  </div>
+</header>
+
+<!-- ── SIDEBAR ─────────────────────────────────────────── -->
+<aside>
+
+  <!-- Model Load -->
+  <div class="sec">
+    <div class="sec-label">Engine</div>
+    <div class="load-panel">
+      <div class="model-info-card">
+        <div class="mic">🧠</div>
+        <div class="model-name-big">Kokoro-82M</div>
+        <div class="model-desc">Apache 2.0 · 82M params · 54 voices · StyleTTS2 architecture · Emotional, non-robotic speech synthesis</div>
+        <div style="margin-top:4px">
+          <span class="model-tag tag-apache">Apache 2.0</span>
+          <span class="model-tag tag-gpu">RTX GPU</span>
+          <span class="model-tag tag-fast">96× RT</span>
+          <span class="model-tag tag-emo">Emotional</span>
+        </div>
+      </div>
+      <div class="prog-wrap" id="prog-wrap" style="display:none">
+        <div class="prog-fill" id="prog-fill"></div>
+      </div>
+      <div class="prog-label" id="prog-label" style="display:none"></div>
+      <button class="btn-load" id="btn-load">⬇ DOWNLOAD &amp; LOAD MODEL</button>
+    </div>
+  </div>
+
+  <!-- GPU Stats -->
+  <div class="sec" id="gpu-stats-sec" style="display:none">
+    <div class="sec-label">GPU · RTX 4060</div>
+    <div class="gpu-grid">
+      <div class="gstat">
+        <div class="gstat-val" id="gv-used">—</div>
+        <div class="gstat-lbl">VRAM Used</div>
+      </div>
+      <div class="gstat">
+        <div class="gstat-val" id="gv-free">—</div>
+        <div class="gstat-lbl">VRAM Free</div>
+      </div>
+      <div class="gstat">
+        <div class="gstat-val" id="gv-total">—</div>
+        <div class="gstat-lbl">VRAM Total</div>
+      </div>
+    </div>
+    <div class="vram-bar-wrap" style="margin-top:8px">
+      <div class="vram-bar-fill" id="vram-fill" style="width:0%"></div>
+    </div>
+    <div style="font-size:8px;color:var(--tm);margin-top:3px;letter-spacing:.06em" id="gpu-name-label"></div>
+  </div>
+
+  <!-- Voice Picker -->
+  <div class="sec">
+    <div class="sec-label">Voice</div>
+    <div class="voice-filters" id="voice-filters">
+      <button class="vf-btn active" data-filter="all">All</button>
+      <button class="vf-btn" data-filter="en-us">🇺🇸 US</button>
+      <button class="vf-btn" data-filter="en-gb">🇬🇧 UK</button>
+      <button class="vf-btn" data-filter="F">♀ Female</button>
+      <button class="vf-btn" data-filter="M">♂ Male</button>
+      <button class="vf-btn" data-filter="5">★★★★★</button>
+    </div>
+    <div class="voice-grid" id="voice-grid"></div>
+  </div>
+
+  <!-- Speed -->
+  <div class="sec">
+    <div class="sec-label">Speed</div>
+    <div class="speed-row">
+      <input type="range" class="speed-slider" id="speed-slider" min="0.5" max="2.0" step="0.05" value="1.0"/>
+      <span class="speed-val" id="speed-val">1.0×</span>
+    </div>
+  </div>
+
+</aside>
+
+<!-- ── MAIN ────────────────────────────────────────────── -->
+<main>
+  <div class="tx-header">
+    <div class="tx-title">Real-Time Transcript</div>
+    <div class="hdr-btns">
+      <button class="sm-btn" id="btn-clear">CLEAR</button>
+    </div>
+  </div>
+
+  <!-- Text input -->
+  <div class="input-area">
+    <textarea class="text-input" id="text-input" placeholder="Type or paste text here — each word will appear as it is spoken…" rows="3"></textarea>
+    <div class="input-actions">
+      <span class="char-count" id="char-count">0 chars</span>
+      <!-- Presets -->
+      <div class="preset-row">
+        <span class="preset-chip" data-text="Hello! Welcome to VoxCast — real-time text to speech powered by Kokoro on your RTX GPU.">👋 Welcome</span>
+        <span class="preset-chip" data-text="The quick brown fox jumps over the lazy dog. How vexingly quick daft zebras jump!">🦊 Pangram</span>
+        <span class="preset-chip" data-text="I'm excited to demonstrate emotional speech synthesis today. This technology can express joy, curiosity, urgency, and calm — all without sounding robotic!">😊 Emotional</span>
+        <span class="preset-chip" data-text="In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole, filled with the ends of worms and an oozy smell. It was a hobbit-hole, and that means comfort.">📖 Story</span>
+      </div>
+      <button class="btn-speak" id="btn-speak" disabled>
+        <span id="speak-icon">▶</span>
+        <span id="speak-label">SPEAK</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Transcript output -->
+  <div class="tx-body" id="tx-body">
+    <div class="empty-state" id="empty-state">
+      <div class="ei">🔊</div>
+      <div class="el">Load model · pick a voice · type text · speak</div>
+    </div>
+    <div class="tx-content" id="tx-content" style="display:none"></div>
+  </div>
+
+  <!-- Waveform visualiser -->
+  <div class="wave-bar" id="wave-bar" style="display:none">
+    <canvas id="wave"></canvas>
+  </div>
+</main>
+
+<!-- ── STATUS FOOTER ────────────────────────────────────── -->
+<footer>
+  <div class="status-item">MODEL <span id="sf-model">—</span></div>
+  <div class="status-item">VOICE <span id="sf-voice">—</span></div>
+  <div class="status-item">WORDS <span id="sf-words">0</span></div>
+  <div class="status-item">SPEED <span id="sf-speed">1.0×</span></div>
+  <div class="log-strip" id="log-strip"></div>
+</footer>
+
+</div><!-- .app -->
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   VOXCAST FRONTEND — Kokoro TTS  (sync-fixed)
+   ═══════════════════════════════════════════════════════════════
+
+   KEY TIMING MODEL
+   ────────────────
+   The backend sends events interleaved like this:
+
+     token {index:0, t_ms:0}       ← word 0 starts at 0 ms into chunk A
+     token {index:1, t_ms:210}     ← word 1 starts at 210 ms into chunk A
+     audio {b64:..., duration_ms:480}  ← chunk A PCM
+     token {index:2, t_ms:0}       ← word 2 starts at 0 ms into chunk B
+     audio {b64:..., duration_ms:320}  ← chunk B PCM
+     done
+
+   t_ms is RELATIVE to the start of the IMMEDIATELY FOLLOWING audio chunk.
+   We buffer tokens until we see an audio event, then attach them to that
+   audio chunk so we can schedule highlights precisely once we know when
+   that chunk will start playing.
+
+   Playback uses AudioContext.currentTime (a stable monotonic clock).
+   Each chunk is scheduled at nextPlayTime; when we enqueue a chunk we know:
+     highlight_wall_time = performance.now()
+                         + (chunkStartCtxTime - audioCtx.currentTime)*1000
+                         + token.t_ms
+   ═══════════════════════════════════════════════════════════════ */
+
+// ── State ────────────────────────────────────────────────────
+let ws             = null;
+let modelLoaded    = false;
+let speaking       = false;
+let selectedVoice  = 'af_heart';
+let audioCtx       = null;
+let analyserNode   = null;
+let waveData       = null;
+let nextPlayTime   = 0;       // audioCtx.currentTime of next chunk's start
+let wordTokens     = [];      // [{el, word, index}]  — DOM spans
+let currentWordIdx = -1;
+let pendingTokens  = [];      // tokens buffered since last audio chunk
+let voiceFilter    = 'all';
+let rafId          = null;
+let sessionId      = 0;       // incremented each utterance; invalidates stale setTimeout callbacks
+
+// Waveform canvas
+let waveCtx2d      = null;
+
+const SAMPLE_RATE  = 24000;
+
+// ── DOM ──────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const btnLoad    = $('btn-load');
+const btnSpeak   = $('btn-speak');
+const btnClear   = $('btn-clear');
+const textInput  = $('text-input');
+const txContent  = $('tx-content');
+const txBody     = $('tx-body');
+const emptyState = $('empty-state');
+const charCount  = $('char-count');
+const progWrap   = $('prog-wrap');
+const progFill   = $('prog-fill');
+const progLabel  = $('prog-label');
+const speedSlider= $('speed-slider');
+const speedVal   = $('speed-val');
+const waveCvs    = $('wave');
+waveCtx2d        = waveCvs.getContext('2d');
+
+let VOICES = {};
+
+// ── Waveform visualiser ──────────────────────────────────────
+function drawWave() {
+  rafId = requestAnimationFrame(drawWave);
+  if (!analyserNode || !waveData) return;
+  analyserNode.getByteTimeDomainData(waveData);
+  const W = waveCvs.width  = waveCvs.offsetWidth  * devicePixelRatio;
+  const H = waveCvs.height = waveCvs.offsetHeight * devicePixelRatio;
+  waveCtx2d.clearRect(0, 0, W, H);
+  waveCtx2d.beginPath();
+  waveCtx2d.strokeStyle = 'rgba(0,200,240,0.6)';
+  waveCtx2d.lineWidth   = devicePixelRatio;
+  const sl = W / waveData.length;
+  let x = 0;
+  for (let i = 0; i < waveData.length; i++) {
+    const y = (waveData[i] / 128) * H / 2;
+    i === 0 ? waveCtx2d.moveTo(x, y) : waveCtx2d.lineTo(x, y);
+    x += sl;
+  }
+  waveCtx2d.stroke();
+}
+
+// ── Audio Context ────────────────────────────────────────────
+function ensureAudioCtx() {
+  if (audioCtx) return;
+  audioCtx     = new AudioContext({ sampleRate: SAMPLE_RATE });
+  analyserNode = audioCtx.createAnalyser();
+  analyserNode.fftSize = 512;
+  waveData     = new Uint8Array(analyserNode.frequencyBinCount);
+  analyserNode.connect(audioCtx.destination);
+}
+
+/**
+ * Decode a Float32 PCM base64 chunk, schedule it for gapless playback,
+ * and schedule word highlight timers for the tokens that belong to it.
+ *
+ * @param {string}  b64pcm      - base64-encoded Float32LE PCM
+ * @param {Array}   tokens      - [{index, t_ms}] relative to this chunk's start
+ */
+function enqueueChunkWithTokens(b64pcm, tokens) {
+  ensureAudioCtx();
+
+  // ── Decode base64 Float32 PCM ──
+  const raw  = atob(b64pcm);
+  const dv   = new DataView(new ArrayBuffer(raw.length));
+  for (let i = 0; i < raw.length; i++) dv.setUint8(i, raw.charCodeAt(i));
+  const f32  = new Float32Array(dv.buffer);
+
+  const abuf = audioCtx.createBuffer(1, f32.length, SAMPLE_RATE);
+  abuf.copyToChannel(f32, 0);
+
+  const src  = audioCtx.createBufferSource();
+  src.buffer = abuf;
+  src.connect(analyserNode);
+
+  // ── Schedule playback ──
+  const now = audioCtx.currentTime;
+  if (nextPlayTime < now + 0.01) {
+    // First chunk (or gap after a pause): start shortly from now
+    nextPlayTime = now + 0.05;
+  }
+  const chunkCtxStart = nextPlayTime;   // audioCtx time this chunk starts
+  src.start(chunkCtxStart);
+  nextPlayTime += abuf.duration;
+
+  // ── Schedule word highlights ──
+  // Convert AudioContext time → wall clock delay:
+  //   delay_ms = (chunkCtxStart - audioCtx.currentTime) * 1000 + token.t_ms
+  // We read audioCtx.currentTime NOW (synchronously), so the reference is stable.
+  const ctxNow     = audioCtx.currentTime;
+  const chunkDelay = (chunkCtxStart - ctxNow) * 1000; // ms until chunk begins
+
+  const mySession = sessionId;             // capture session at scheduling time
+  for (const tok of tokens) {
+    const fireIn = chunkDelay + tok.t_ms;   // ms from now when word starts
+    const idx    = tok.index;
+    setTimeout(() => {
+      // Discard if a new utterance has started or playback stopped
+      if (!speaking || sessionId !== mySession) return;
+      highlightWord(idx);
+    }, Math.max(0, fireIn));
+  }
+}
+
+// ── Word highlight ───────────────────────────────────────────
+function highlightWord(index) {
+  // Mark previous word as spoken
+  if (currentWordIdx >= 0 && currentWordIdx < wordTokens.length) {
+    wordTokens[currentWordIdx].el.className = 'word-tok spoken';
+  }
+  currentWordIdx = index;
+  if (index < wordTokens.length) {
+    const el = wordTokens[index].el;
+    el.className = 'word-tok current';
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  $('sf-words').textContent = index + 1;
+}
+
+// ── Voice Rendering ──────────────────────────────────────────
+function renderVoices() {
+  const grid = $('voice-grid');
+  grid.innerHTML = '';
+  for (const [id, v] of Object.entries(VOICES)) {
+    const show =
+      voiceFilter === 'all'   ? true :
+      voiceFilter === 'en-us' ? v.lang === 'en-us' :
+      voiceFilter === 'en-gb' ? v.lang === 'en-gb' :
+      voiceFilter === 'F'     ? v.gender === 'F' :
+      voiceFilter === 'M'     ? v.gender === 'M' :
+      voiceFilter === '5'     ? v.stars === 5 :
+      true;
+    if (!show) continue;
+
+    const card     = document.createElement('div');
+    card.className = 'voice-card' + (id === selectedVoice ? ' selected' : '');
+    card.dataset.id = id;
+
+    const initials = v.name.slice(0, 2).toUpperCase();
+    const avClass  = v.gender === 'F' ? 'av-f' : 'av-m';
+    const langDisp = v.lang === 'en-us' ? '🇺🇸' : '🇬🇧';
+    const starsOn  = '★'.repeat(v.stars);
+    const starsOff = '☆'.repeat(5 - v.stars);
+
+    card.innerHTML = `
+      <div class="voice-avatar ${avClass}">${initials}</div>
+      <div class="voice-info">
+        <div class="voice-nm">${v.name}</div>
+        <div class="voice-style">${v.style}</div>
+      </div>
+      <div class="voice-meta">
+        <div class="voice-lang">${langDisp}</div>
+        <div class="voice-stars"><span class="on">${starsOn}</span>${starsOff}</div>
+      </div>`;
+
+    card.addEventListener('click', () => {
+      selectedVoice = id;
+      document.querySelectorAll('.voice-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      $('sf-voice').textContent = v.name;
+      log(`Voice: ${v.name}`, 'info');
+    });
+    grid.appendChild(card);
+  }
+}
+
+// ── Status Polling ───────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const r    = await fetch('/api/status');
+    const data = await r.json();
+
+    if (data.voices && Object.keys(VOICES).length === 0) {
+      VOICES = data.voices;
+      renderVoices();
+    }
+
+    const badge = $('gpu-badge');
+    if (data.loaded) {
+      badge.className = 'gpu-badge ready';
+      $('gpu-text').textContent = `GPU READY · ${data.device?.toUpperCase()}`;
+      btnSpeak.disabled = (textInput.value.trim() === '');
+      btnLoad.disabled  = true;
+      btnLoad.textContent = '✓ MODEL LOADED';
+      $('sf-model').textContent = 'Kokoro-82M';
+      modelLoaded = true;
+
+      if (data.gpu?.name) {
+        $('gpu-stats-sec').style.display = 'block';
+        $('gpu-name-label').textContent   = data.gpu.name;
+        $('gv-used').textContent  = data.gpu.vram_used  + ' GB';
+        $('gv-free').textContent  = data.gpu.vram_free  + ' GB';
+        $('gv-total').textContent = data.gpu.vram_total + ' GB';
+        const pct = Math.min(100, (data.gpu.vram_used / data.gpu.vram_total) * 100);
+        $('vram-fill').style.width = pct + '%';
+        $('gpu-mem').textContent   = `${data.gpu.vram_used}/${data.gpu.vram_total} GB VRAM`;
+      }
+    } else if (data.loading) {
+      badge.className = 'gpu-badge loading';
+      $('gpu-text').textContent = 'LOADING…';
+    } else if (data.error) {
+      badge.className = 'gpu-badge error';
+      $('gpu-text').textContent = 'ERROR';
+    }
+  } catch(e) {}
+}
+
+// ── Model Load with SSE progress ─────────────────────────────
+async function loadModel() {
+  btnLoad.disabled = true;
+  progWrap.style.display  = 'block';
+  progLabel.style.display = 'block';
+  log('Downloading Kokoro…', 'pur');
+
+  await fetch('/api/load', { method: 'POST' });
+
+  const es = new EventSource('/api/progress');
+  es.onmessage = ev => {
+    const { pct, msg } = JSON.parse(ev.data);
+    if (pct === -1) {
+      progFill.style.background = 'var(--red)';
+      progLabel.textContent = msg;
+      log('Load error', 'err');
+      btnLoad.disabled = false;
+      es.close();
+      return;
+    }
+    progFill.style.width  = pct + '%';
+    progLabel.textContent = `${pct}% — ${msg}`;
+    $('gpu-badge').className = 'gpu-badge loading';
+    $('gpu-text').textContent = `${pct}% — ${msg}`;
+
+    if (pct === 100) {
+      log('Kokoro ready!', 'ok');
+      es.close();
+      fetchStatus();
+      progWrap.style.display  = 'none';
+      progLabel.style.display = 'none';
+    }
+  };
+  es.onerror = () => es.close();
+}
+
+// ── WebSocket TTS ────────────────────────────────────────────
+function connectWS() {
+  ws = new WebSocket(`ws://${location.host}/ws/tts`);
+  ws.onopen  = () => {};
+  ws.onerror = () => log('WS error', 'err');
+  ws.onclose = () => { ws = null; };
+  ws.onmessage = ev => handleTTSEvent(JSON.parse(ev.data));
+}
+
+function handleTTSEvent(msg) {
+  switch (msg.type) {
+
+    case 'token': {
+      /*
+       * Buffer this token until we see the audio chunk it belongs to.
+       * The backend sends tokens BEFORE the audio chunk they are part of.
+       */
+      pendingTokens.push({ index: msg.index, t_ms: msg.t_ms });
+      break;
+    }
+
+    case 'audio': {
+      /*
+       * We now have an audio chunk.  All tokens in pendingTokens belong to
+       * THIS chunk (t_ms is relative to this chunk's start).
+       * Hand both to enqueueChunkWithTokens so highlights fire at the right
+       * absolute wall-clock moment.
+       */
+      const tokensForChunk = pendingTokens.splice(0); // drain buffer
+      enqueueChunkWithTokens(msg.b64, tokensForChunk);
+
+      $('wave-bar').style.display = 'block';
+      if (!rafId) rafId = requestAnimationFrame(drawWave);
+      break;
+    }
+
+    case 'done': {
+      /*
+       * Backend finished sending.  We may still have audio in the
+       * AudioContext queue.  Wait for it to finish before cleaning up.
+       */
+      const remaining = audioCtx
+        ? Math.max(0, (nextPlayTime - audioCtx.currentTime) * 1000)
+        : 0;
+      setTimeout(finishSpeaking, remaining + 250);
+      break;
+    }
+
+    case 'error': {
+      log('TTS: ' + msg.msg, 'err');
+      finishSpeaking();
+      break;
+    }
+  }
+}
+
+function finishSpeaking() {
+  speaking = false;
+  btnSpeak.className = 'btn-speak';
+  $('speak-icon').textContent  = '▶';
+  $('speak-label').textContent = 'SPEAK';
+  $('wave-bar').style.display  = 'none';
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+
+  // Mark all words as spoken
+  wordTokens.forEach(({ el }) => el.className = 'word-tok spoken');
+
+  // Remove blinking cursor
+  const cursor = txContent.querySelector('.speaking-cursor');
+  if (cursor) cursor.remove();
+
+  log('Done', 'ok');
+}
+
+// ── Build transcript DOM ─────────────────────────────────────
+function buildTranscript(text) {
+  txContent.innerHTML = '';
+  wordTokens     = [];
+  currentWordIdx = -1;
+  pendingTokens  = [];   // ← reset pending token buffer
+  nextPlayTime   = 0;
+
+  const words = text.match(/\S+/g) || [];
+  words.forEach((word, i) => {
+    const span         = document.createElement('span');
+    span.className     = 'word-tok pending';
+    span.textContent   = (i > 0 ? ' ' : '') + word;
+    span.dataset.tip   = `#${i + 1}`;
+    txContent.appendChild(span);
+    wordTokens.push({ el: span, word, index: i });
+  });
+
+  // Blinking cursor at end
+  const cursor       = document.createElement('span');
+  cursor.className   = 'speaking-cursor';
+  txContent.appendChild(cursor);
+
+  emptyState.style.display = 'none';
+  txContent.style.display  = 'block';
+  txBody.scrollTop = 0;
+}
+
+// ── Stop & cleanup ───────────────────────────────────────────
+function stopSpeaking() {
+  sessionId++;             // immediately invalidates all pending setTimeout highlights
+  if (ws) { try { ws.close(); } catch(e){} ws = null; }
+  if (audioCtx) { try { audioCtx.close(); } catch(e){} audioCtx = null; }
+  analyserNode   = null;
+  waveData       = null;
+  nextPlayTime   = 0;
+  pendingTokens  = [];
+  currentWordIdx = -1;
+  finishSpeaking();
+}
+
+// ── Speak Button ─────────────────────────────────────────────
+btnSpeak.addEventListener('click', () => {
+  if (speaking) {
+    stopSpeaking();
+    return;
+  }
+
+  const text = textInput.value.trim();
+  if (!text || !modelLoaded) return;
+
+  // ── Increment session ID first — invalidates any stale setTimeout ──
+  sessionId++;
+
+  speaking = true;
+  btnSpeak.className           = 'btn-speak speaking';
+  $('speak-icon').textContent  = '■';
+  $('speak-label').textContent = 'STOP';
+  log(`Speaking with ${selectedVoice}…`, 'info');
+
+  // Tear down previous AudioContext fully; create a fresh one so
+  // audioCtx.currentTime starts from 0 and nextPlayTime is valid.
+  if (audioCtx) { try { audioCtx.close(); } catch(e){} audioCtx = null; }
+  analyserNode  = null;
+  waveData      = null;
+  nextPlayTime  = 0;
+  pendingTokens = [];
+  currentWordIdx = -1;   // ← must reset BEFORE buildTranscript
+
+  ensureAudioCtx();
+  // audioCtx.resume() returns a Promise; we don't need to await it —
+  // AudioContext starts in running state on most browsers when freshly created.
+  audioCtx.resume().catch(() => {});
+  buildTranscript(text);
+
+  if (!ws || ws.readyState !== WebSocket.OPEN) connectWS();
+
+  const sendMsg = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        text,
+        voice: selectedVoice,
+        speed: parseFloat(speedSlider.value),
+      }));
+    } else {
+      setTimeout(sendMsg, 50);
+    }
+  };
+  sendMsg();
+});
+
+// ── Preset chips ─────────────────────────────────────────────
+document.querySelectorAll('.preset-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    textInput.value       = chip.dataset.text;
+    charCount.textContent = chip.dataset.text.length + ' chars';
+    if (modelLoaded) btnSpeak.disabled = false;
+  });
+});
+
+// ── Controls ──────────────────────────────────────────────────
+textInput.addEventListener('input', () => {
+  const len = textInput.value.length;
+  charCount.textContent = len + ' chars';
+  if (modelLoaded) btnSpeak.disabled = (len === 0);
+});
+
+speedSlider.addEventListener('input', () => {
+  const v = parseFloat(speedSlider.value).toFixed(2).replace(/\.?0+$/, '');
+  speedVal.textContent  = v + '×';
+  $('sf-speed').textContent = v + '×';
+});
+
+btnClear.addEventListener('click', () => {
+  txContent.innerHTML      = '';
+  txContent.style.display  = 'none';
+  emptyState.style.display = '';
+  wordTokens = []; currentWordIdx = -1;
+  $('sf-words').textContent = '0';
+});
+
+btnLoad.addEventListener('click', loadModel);
+
+document.querySelectorAll('.vf-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.vf-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    voiceFilter = btn.dataset.filter;
+    renderVoices();
+  });
+});
+
+// ── Log strip ─────────────────────────────────────────────────
+function log(msg, type = 'info') {
+  const strip = $('log-strip');
+  const b     = document.createElement('div');
+  b.className   = `log-b ${type}`;
+  b.textContent = msg;
+  strip.appendChild(b);
+  while (strip.children.length > 6) strip.removeChild(strip.firstChild);
+}
+
+// ── Init ──────────────────────────────────────────────────────
+(async function init() {
+  await fetchStatus();
+  $('sf-voice').textContent = VOICES[selectedVoice]?.name || selectedVoice;
+  $('sf-speed').textContent = '1.0×';
+  setInterval(fetchStatus, 4000);
+  connectWS();
+})();
+</script>
+</body>
+</html>

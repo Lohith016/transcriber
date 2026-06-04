@@ -1,0 +1,14 @@
+# ── Core server ──────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+
+# ── Whisper (faster-whisper uses CTranslate2 for fast CPU/GPU inference) ──
+faster-whisper>=1.0.3
+
+# ── NumPy (audio processing) ──────────────────────────────────────
+numpy>=1.26.0
+
+# ── Optional: GPU acceleration (uncomment if you have an NVIDIA GPU) ──
+torch>=2.2.0          # auto-detected at runtime; install separately from pytorch.org
+# nvidia-cudnn-cu11     # or cu12 depending on your CUDA version

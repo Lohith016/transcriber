@@ -1,0 +1,35 @@
+# ── Core server ───────────────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+
+# ── Kokoro TTS ────────────────────────────────────────────────────────────────
+kokoro>=0.9.4
+
+# ── Audio ─────────────────────────────────────────────────────────────────────
+soundfile>=0.12.1
+numpy>=1.26.0
+
+# ── Transformers (PINNED — DO NOT upgrade to 5.x) ─────────────────────────────
+# transformers 5.x uses torch.float8_e8m0fnu which requires PyTorch 2.4+.
+# Even with PyTorch 2.5, transformers 5.x has breaking API changes that
+# break kokoro's AlbertModel import. Pin to last stable 4.x release.
+transformers>=4.41.0,<5.0.0
+
+# ── PyTorch CUDA (install MANUALLY before this file) ─────────────────────────
+# PyTorch 2.4+ is REQUIRED. Install with:
+#
+#   pip install torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 \
+#       --index-url https://download.pytorch.org/whl/cu121
+#
+# CUDA version guide for RTX 4060:
+#   CUDA 12.1 → --index-url https://download.pytorch.org/whl/cu121  (recommended)
+#   CUDA 12.4 → --index-url https://download.pytorch.org/whl/cu124
+#   CUDA 11.8 → --index-url https://download.pytorch.org/whl/cu118
+#
+# Check your CUDA version: nvcc --version  OR  nvidia-smi
+#
+# ── eSpeak-NG (Windows system dependency) ────────────────────────────────────
+# Required by Kokoro for text-to-phoneme conversion. NOT a pip package.
+# Download: https://github.com/espeak-ng/espeak-ng/releases
+# Install to: C:\Program Files\eSpeak NG\   (default path)
